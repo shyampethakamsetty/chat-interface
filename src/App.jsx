@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Bot, User, Trash2, RotateCcw, MessageSquare, Clock, Plus } from 'lucide-react'
+import { Send, Bot, User, Trash2, RotateCcw, MessageSquare, Clock, Plus, ChevronDown, ChevronUp, Code } from 'lucide-react'
 import './App.css'
 
 function App() {
@@ -8,6 +8,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState('')
   const [chatHistory, setChatHistory] = useState([])
+  const [expandedRawData, setExpandedRawData] = useState(new Set())
   const messagesEndRef = useRef(null)
 
   // Example questions for quick start
@@ -41,24 +42,37 @@ function App() {
       id: Date.now(),
       text: textToSend,
       sender: 'user',
-      timestamp: new Date().toLocaleTimeString()
+      timestamp: new Date().toLocaleTimeString(),
+      rawData: {
+        request: {
+          message: textToSend,
+          session_id: sessionId
+        }
+      }
     }
 
     setMessages(prev => [...prev, userMessage])
     setInputMessage('')
     setIsLoading(true)
 
+    const requestStartTime = Date.now()
+    const apiUrl = 'https://ai-agent-api-pqoa.onrender.com/agent/message'
+    const requestBody = {
+      message: textToSend,
+      session_id: sessionId
+    }
+
     try {
-      const response = await fetch('https://ai-agent-api-pqoa.onrender.com/agent/message', {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          message: textToSend,
-          session_id: sessionId
-        })
+        body: JSON.stringify(requestBody)
       })
+
+      const responseEndTime = Date.now()
+      const responseTime = responseEndTime - requestStartTime
 
       const data = await response.json()
 
@@ -70,7 +84,25 @@ function App() {
           timestamp: new Date().toLocaleTimeString(),
           plugins: data.data.plugins_called && data.data.plugins_called.length > 0 
             ? data.data.plugins_called 
-            : ['vector search']
+            : ['vector search'],
+          rawData: {
+            request: {
+              url: apiUrl,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: requestBody,
+              timestamp: new Date().toISOString()
+            },
+            response: {
+              status: response.status,
+              statusText: response.statusText,
+              headers: Object.fromEntries(response.headers.entries()),
+              data: data,
+              responseTime: `${responseTime}ms`
+            }
+          }
         }
         setMessages(prev => [...prev, botMessage])
         
@@ -100,7 +132,23 @@ function App() {
         text: 'Sorry, I encountered an error. Please try again.',
         sender: 'bot',
         timestamp: new Date().toLocaleTimeString(),
-        isError: true
+        isError: true,
+        rawData: {
+          request: {
+            url: apiUrl,
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: requestBody,
+            timestamp: new Date().toISOString()
+          },
+          error: {
+            message: error.message,
+            type: error.name,
+            timestamp: new Date().toISOString()
+          }
+        }
       }
       setMessages(prev => [...prev, errorMessage])
     } finally {
@@ -118,6 +166,30 @@ function App() {
       e.preventDefault()
       sendMessage()
     }
+  }
+
+  const toggleRawData = (messageId) => {
+    setExpandedRawData(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(messageId)) {
+        newSet.delete(messageId)
+      } else {
+        newSet.add(messageId)
+      }
+      return newSet
+    })
+  }
+
+  const shouldShowRawData = (message) => {
+    // Show raw data for all bot messages since we have comprehensive request/response data
+    if (message.sender === 'bot' && message.rawData) {
+      return true
+    }
+    // Always show for error messages
+    if (message.isError) {
+      return true
+    }
+    return false
   }
 
   return (
@@ -217,6 +289,86 @@ function App() {
                     </div>
                   )}
                   <div className="message-timestamp">{message.timestamp}</div>
+                  
+                  {/* Raw Data Dropdown */}
+                  {message.rawData && shouldShowRawData(message) && (
+                    <div className="raw-data-section">
+                      <button 
+                        className="raw-data-toggle"
+                        onClick={() => toggleRawData(message.id)}
+                      >
+                        <Code size={14} />
+                        <span>Raw Data</span>
+                        {expandedRawData.has(message.id) ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </button>
+                      
+                      {expandedRawData.has(message.id) && (
+                        <div className="raw-data-content">
+                          {message.rawData.request && (
+                            <div className="raw-data-section-item">
+                              <h4>Request:</h4>
+                              <div className="raw-data-details">
+                                <div className="detail-row">
+                                  <strong>URL:</strong> {message.rawData.request.url}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Method:</strong> {message.rawData.request.method}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Timestamp:</strong> {new Date(message.rawData.request.timestamp).toLocaleString()}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Headers:</strong>
+                                  <pre className="headers-pre">{JSON.stringify(message.rawData.request.headers, null, 2)}</pre>
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Body:</strong>
+                                  <pre>{JSON.stringify(message.rawData.request.body, null, 2)}</pre>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {message.rawData.response && (
+                            <div className="raw-data-section-item">
+                              <h4>Response:</h4>
+                              <div className="raw-data-details">
+                                <div className="detail-row">
+                                  <strong>Status:</strong> {message.rawData.response.status} {message.rawData.response.statusText}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Response Time:</strong> {message.rawData.response.responseTime}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Response Headers:</strong>
+                                  <pre className="headers-pre">{JSON.stringify(message.rawData.response.headers, null, 2)}</pre>
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Response Data:</strong>
+                                  <pre>{JSON.stringify(message.rawData.response.data, null, 2)}</pre>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {message.rawData.error && (
+                            <div className="raw-data-section-item">
+                              <h4>Error:</h4>
+                              <div className="raw-data-details">
+                                <div className="detail-row">
+                                  <strong>Type:</strong> {message.rawData.error.type}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Message:</strong> {message.rawData.error.message}
+                                </div>
+                                <div className="detail-row">
+                                  <strong>Timestamp:</strong> {new Date(message.rawData.error.timestamp).toLocaleString()}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
